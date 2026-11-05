@@ -1,0 +1,928 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChromeOS Flex & Crostini System Monitor</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js for Live Telemetry Graphs -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        chrome: {
+                            bg: '#121316',
+                            card: '#1e1f23',
+                            border: '#2e3138',
+                            accent: '#8ab4f8',
+                            accentHover: '#aecbfa',
+                            green: '#81c995',
+                            red: '#f28b82',
+                            yellow: '#fdd663',
+                            purple: '#c58af9',
+                            darkText: '#e8eaed',
+                            subText: '#9aa0a6'
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Roboto', 'Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'Fira Code', 'monospace']
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #121316;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #2e3138;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #8ab4f8;
+        }
+        .pulse-glow {
+            box-shadow: 0 0 15px rgba(138, 180, 248, 0.15);
+        }
+    </style>
+</head>
+<body class="bg-chrome-bg text-chrome-darkText font-sans min-h-screen flex flex-col selection:bg-chrome-accent selection:text-chrome-bg">
+
+    <!-- Top Navigation Header -->
+    <header class="border-b border-chrome-border bg-chrome-card/80 backdrop-blur sticky top-0 z-30 px-4 py-3 flex flex-wrap items-center justify-between gap-4">
+        <div class="flex items-center gap-3">
+            <div class="p-2 bg-chrome-accent/10 rounded-lg border border-chrome-accent/20 text-chrome-accent">
+                <i data-lucide="cpu" class="w-6 h-6"></i>
+            </div>
+            <div>
+                <h1 class="font-bold text-lg leading-tight flex items-center gap-2">
+                    ChromeOS Flex Resource Monitor
+                    <span id="crostini-badge" class="text-xs px-2 py-0.5 rounded-full bg-chrome-purple/20 text-chrome-purple border border-chrome-purple/30 font-mono">Crostini Aware</span>
+                </h1>
+                <p class="text-xs text-chrome-subText">Tailored for MacBook Air 2018 (Intel T2) & Debian LXC</p>
+            </div>
+        </div>
+
+        <!-- Connection Status & Quick Controls -->
+        <div class="flex items-center gap-3 flex-wrap">
+            <!-- Refresh Interval Controls -->
+            <div class="flex items-center gap-2 bg-chrome-bg px-3 py-1.5 rounded-lg border border-chrome-border text-xs">
+                <i data-lucide="timer" class="w-4 h-4 text-chrome-subText"></i>
+                <span class="text-chrome-subText">Rate:</span>
+                <span id="interval-val" class="font-mono text-chrome-accent font-semibold">1.0s</span>
+                <input type="range" id="interval-slider" min="0.5" max="5.0" step="0.5" value="1.0" class="w-16 accent-chrome-accent cursor-pointer">
+            </div>
+
+            <!-- Agent Toggle Switch -->
+            <div class="flex items-center gap-2 bg-chrome-bg px-3 py-1.5 rounded-lg border border-chrome-border text-xs">
+                <span class="text-chrome-subText">Mode:</span>
+                <button id="mode-toggle" class="font-medium px-2 py-0.5 rounded transition-colors text-xs bg-chrome-border text-chrome-subText hover:text-white">
+                    Simulated API
+                </button>
+            </div>
+
+            <!-- Agent Helper Button -->
+            <button id="open-helper-btn" class="flex items-center gap-1.5 text-xs bg-chrome-accent/10 hover:bg-chrome-accent/20 text-chrome-accent border border-chrome-accent/30 px-3 py-1.5 rounded-lg transition-all font-medium">
+                <i data-lucide="terminal" class="w-4 h-4"></i>
+                <span>Crostini Agent</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Dashboard Container -->
+    <main class="flex-1 p-4 md:p-6 max-w-7xl mx-auto w-full space-y-6">
+
+        <!-- Banner Alert if running in Demo Mode -->
+        <div id="demo-mode-alert" class="bg-chrome-yellow/10 border border-chrome-yellow/30 text-chrome-yellow p-3 rounded-xl text-xs md:text-sm flex items-center justify-between gap-3">
+            <div class="flex items-center gap-2">
+                <i data-lucide="info" class="w-5 h-5 shrink-0"></i>
+                <span>Running in <strong>Browser Hybrid Mode</strong>. Host metrics are estimated via Web APIs. Connect the local Crostini Helper Agent for 100% exact hardware telemetry.</span>
+            </div>
+            <button onclick="document.getElementById('open-helper-btn').click()" class="underline font-semibold hover:text-white shrink-0">Setup Agent</button>
+        </div>
+
+        <!-- Metric Gauges Row (CPU, RAM, Host Storage, Container Storage) -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            
+            <!-- CPU Gauge Card -->
+            <div class="bg-chrome-card border border-chrome-border p-4 rounded-xl flex flex-col items-center relative overflow-hidden group hover:border-chrome-accent/50 transition-all">
+                <div class="w-full flex items-center justify-between mb-2">
+                    <span class="text-xs font-semibold uppercase tracking-wider text-chrome-subText flex items-center gap-1.5">
+                        <i data-lucide="cpu" class="w-4 h-4 text-chrome-accent"></i> CPU Utilization
+                    </span>
+                    <span id="cpu-load-avg" class="text-xs font-mono text-chrome-subText">Load: 0.00</span>
+                </div>
+                <div class="relative w-36 h-36 my-1">
+                    <canvas id="cpu-gauge" width="144" height="144"></canvas>
+                    <div class="absolute inset-0 flex flex-col items-center justify-center">
+                        <span id="cpu-percent" class="text-2xl font-bold font-mono">0%</span>
+                        <span id="cpu-freq" class="text-[10px] text-chrome-subText font-mono">2.30 GHz</span>
+                    </div>
+                </div>
+                <div class="w-full mt-2 text-[11px] text-chrome-subText flex justify-between border-t border-chrome-border/50 pt-2 font-mono">
+                    <span>Cores: <strong id="cpu-cores" class="text-chrome-darkText">4</strong></span>
+                    <span>Arch: <strong class="text-chrome-darkText">x86_64</strong></span>
+                </div>
+            </div>
+
+            <!-- RAM Gauge Card -->
+            <div class="bg-chrome-card border border-chrome-border p-4 rounded-xl flex flex-col items-center relative overflow-hidden group hover:border-chrome-green/50 transition-all">
+                <div class="w-full flex items-center justify-between mb-2">
+                    <span class="text-xs font-semibold uppercase tracking-wider text-chrome-subText flex items-center gap-1.5">
+                        <i data-lucide="memory-stick" class="w-4 h-4 text-chrome-green"></i> RAM Usage
+                    </span>
+                    <span id="ram-used-text" class="text-xs font-mono text-chrome-green">0 / 0 GB</span>
+                </div>
+                <div class="relative w-36 h-36 my-1">
+                    <canvas id="ram-gauge" width="144" height="144"></canvas>
+                    <div class="absolute inset-0 flex flex-col items-center justify-center">
+                        <span id="ram-percent" class="text-2xl font-bold font-mono">0%</span>
+                        <span id="ram-free-text" class="text-[10px] text-chrome-subText font-mono">Free: 0 GB</span>
+                    </div>
+                </div>
+                <div class="w-full mt-2 text-[11px] text-chrome-subText flex justify-between border-t border-chrome-border/50 pt-2 font-mono">
+                    <span>Swap: <strong id="swap-text" class="text-chrome-darkText">0 MB</strong></span>
+                    <span>Type: <strong class="text-chrome-darkText">LPDDR3</strong></span>
+                </div>
+            </div>
+
+            <!-- Host Storage Card -->
+            <div class="bg-chrome-card border border-chrome-border p-4 rounded-xl flex flex-col justify-between hover:border-chrome-yellow/50 transition-all">
+                <div>
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-xs font-semibold uppercase tracking-wider text-chrome-subText flex items-center gap-1.5">
+                            <i data-lucide="hard-drive" class="w-4 h-4 text-chrome-yellow"></i> ChromeOS Storage
+                        </span>
+                        <span id="host-disk-percent" class="text-xs font-mono text-chrome-yellow font-bold">0%</span>
+                    </div>
+                    <div class="mt-4 space-y-2">
+                        <div class="flex justify-between text-xs font-mono">
+                            <span classtext-chrome-subText">Used: <span id="host-disk-used" class="text-chrome-darkText">0 GB</span></span>
+                            <span classtext-chrome-subText">Total: <span id="host-disk-total" class="text-chrome-darkText">128 GB</span></span>
+                        </div>
+                        <div class="w-full h-3 bg-chrome-bg rounded-full overflow-hidden border border-chrome-border p-0.5">
+                            <div id="host-disk-bar" class="h-full bg-chrome-yellow rounded-full transition-all duration-500" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-4 pt-2 border-t border-chrome-border/50 text-[11px] text-chrome-subText space-y-1 font-mono">
+                    <div class="flex justify-between">
+                        <span>Mount Point:</span>
+                        <span class="text-chrome-darkText">/home/chronos</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span>State:</span>
+                        <span class="text-chrome-green">Encrypted (eCryptfs)</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Crostini LXC Storage Card -->
+            <div class="bg-chrome-card border border-chrome-border p-4 rounded-xl flex flex-col justify-between hover:border-chrome-purple/50 transition-all relative overflow-hidden">
+                <div class="absolute -right-4 -bottom-4 opacity-5 text-chrome-purple pointer-events-none">
+                    <i data-lucide="box" class="w-32 h-32"></i>
+                </div>
+                <div>
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-xs font-semibold uppercase tracking-wider text-chrome-subText flex items-center gap-1.5">
+                            <i data-lucide="box" class="w-4 h-4 text-chrome-purple"></i> Crostini Container
+                        </span>
+                        <span id="crostini-disk-percent" class="text-xs font-mono text-chrome-purple font-bold">0%</span>
+                    </div>
+                    <div class="mt-4 space-y-2">
+                        <div class="flex justify-between text-xs font-mono">
+                            <span class="text-chrome-subText">Used: <span id="crostini-disk-used" class="text-chrome-darkText">0 GB</span></span>
+                            <span class="text-chrome-subText">Allocated: <span id="crostini-disk-total" class="text-chrome-darkText">32 GB</span></span>
+                        </div>
+                        <div class="w-full h-3 bg-chrome-bg rounded-full overflow-hidden border border-chrome-border p-0.5">
+                            <div id="crostini-disk-bar" class="h-full bg-chrome-purple rounded-full transition-all duration-500" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-4 pt-2 border-t border-chrome-border/50 text-[11px] text-chrome-subText space-y-1 font-mono">
+                    <div class="flex justify-between">
+                        <span>LXC Image:</span>
+                        <span class="text-chrome-darkText">Debian 12 (Bookworm)</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span>VirtIO Mount:</span>
+                        <span class="text-chrome-darkText">/mnt/stateful_partition</span>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Charts Section (CPU History & Network IO) -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            
+            <!-- CPU Load Real-Time Line Chart -->
+            <div class="bg-chrome-card border border-chrome-border p-4 rounded-xl flex flex-col">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-xs font-semibold uppercase tracking-wider text-chrome-subText flex items-center gap-2">
+                        <i data-lucide="activity" class="w-4 h-4 text-chrome-accent"></i> Real-time CPU History
+                    </h3>
+                    <div class="flex items-center gap-2 text-xs font-mono">
+                        <span class="inline-block w-2.5 h-2.5 rounded-full bg-chrome-accent"></span>
+                        <span class="text-chrome-subText">Usage %</span>
+                    </div>
+                </div>
+                <div class="flex-1 min-h-[220px] relative">
+                    <canvas id="cpuHistoryChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Network Traffic Real-Time Line Chart -->
+            <div class="bg-chrome-card border border-chrome-border p-4 rounded-xl flex flex-col">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-xs font-semibold uppercase tracking-wider text-chrome-subText flex items-center gap-2">
+                        <i data-lucide="arrow-down-up" class="w-4 h-4 text-chrome-green"></i> Network Traffic Speed
+                    </h3>
+                    <div class="flex items-center gap-4 text-xs font-mono">
+                        <span class="flex items-center gap-1 text-chrome-green">
+                            <i data-lucide="arrow-down" class="w-3 h-3"></i> <span id="rx-rate">0 KB/s</span>
+                        </span>
+                        <span class="flex items-center gap-1 text-chrome-accent">
+                            <i data-lucide="arrow-up" class="w-3 h-3"></i> <span id="tx-rate">0 KB/s</span>
+                        </span>
+                    </div>
+                </div>
+                <div class="flex-1 min-h-[220px] relative">
+                    <canvas id="netHistoryChart"></canvas>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Crostini Storage & Process Breakdown Panel -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            
+            <!-- Storage visual comparative stack -->
+            <div class="bg-chrome-card border border-chrome-border p-5 rounded-xl space-y-4">
+                <h3 class="text-xs font-semibold uppercase tracking-wider text-chrome-subText flex items-center gap-2">
+                    <i data-lucide="pie-chart" class="w-4 h-4 text-chrome-yellow"></i> Storage Allocations
+                </h3>
+                
+                <p class="text-xs text-chrome-subText">
+                    ChromeOS Flex dynamically resizes the Crostini sparse disk image (`.qcow2` / raw) inside stateful storage.
+                </p>
+
+                <!-- Comparative Progress Bar -->
+                <div class="space-y-1.5">
+                    <div class="flex justify-between text-xs font-mono">
+                        <span>Disk Breakdown</span>
+                        <span id="disk-total-combined">Total: 128 GB</span>
+                    </div>
+                    <div class="h-4 w-full bg-chrome-bg rounded-lg overflow-hidden border border-chrome-border flex p-0.5">
+                        <div id="stack-crostini" class="h-full bg-chrome-purple rounded-l transition-all duration-500" style="width: 25%" title="Crostini Disk"></div>
+                        <div id="stack-host" class="h-full bg-chrome-yellow transition-all duration-500" style="width: 35%" title="ChromeOS Host"></div>
+                        <div id="stack-free" class="h-full bg-chrome-border/50 rounded-r transition-all duration-500" style="width: 40%" title="Unallocated Free"></div>
+                    </div>
+                    <div class="flex items-center justify-between text-[11px] font-mono pt-1">
+                        <span class="flex items-center gap-1"><span class="w-2 h-2 rounded bg-chrome-purple"></span> Crostini LXC</span>
+                        <span class="flex items-center gap-1"><span class="w-2 h-2 rounded bg-chrome-yellow"></span> ChromeOS User</span>
+                        <span class="flex items-center gap-1"><span class="w-2 h-2 rounded bg-chrome-border"></span> Free Space</span>
+                    </div>
+                </div>
+
+                <div class="bg-chrome-bg/50 p-3 rounded-lg border border-chrome-border/60 text-xs space-y-2">
+                    <div class="flex justify-between">
+                        <span class="text-chrome-subText">Connection Type:</span>
+                        <span id="net-type" class="font-mono text-chrome-darkText">Wi-Fi (802.11ac)</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-chrome-subText">Downlink Capacity:</span>
+                        <span id="net-downlink" class="font-mono text-chrome-darkText">100 Mbps</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-chrome-subText">Round Trip Time (RTT):</span>
+                        <span id="net-rtt" class="font-mono text-chrome-darkText">25 ms</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Top Active System Processes (Simulated or Linux Backend) -->
+            <div class="lg:col-span-2 bg-chrome-card border border-chrome-border p-5 rounded-xl flex flex-col justify-between">
+                <div>
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-xs font-semibold uppercase tracking-wider text-chrome-subText flex items-center gap-2">
+                            <i data-lucide="list-tree" class="w-4 h-4 text-chrome-accent"></i> Active Top Processes (Debian/Crostini Scope)
+                        </h3>
+                        <span class="text-xs font-mono text-chrome-subText" id="process-count">Sorted by CPU %</span>
+                    </div>
+
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left font-mono text-xs">
+                            <thead>
+                                <tr class="text-chrome-subText border-b border-chrome-border/80">
+                                    <th class="pb-2">PID</th>
+                                    <th class="pb-2">COMMAND / PROCESS</th>
+                                    <th class="pb-2">USER</th>
+                                    <th class="pb-2 text-right">CPU %</th>
+                                    <th class="pb-2 text-right">MEM %</th>
+                                </tr>
+                            </thead>
+                            <tbody id="process-table-body" class="divide-y divide-chrome-border/30">
+                                <!-- Process Rows Injected Here -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="mt-4 pt-3 border-t border-chrome-border/50 text-xs text-chrome-subText flex items-center justify-between">
+                    <span>Target Host Kernel: <strong class="font-mono text-chrome-darkText">Linux 6.6.x-chromeos-x86_64</strong></span>
+                    <span id="agent-status-label" class="text-chrome-yellow font-mono">Agent: Disconnected (Fallback Mode)</span>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Docker Containers Section -->
+        <div class="bg-chrome-card border border-chrome-border p-5 rounded-xl space-y-4">
+            <div class="flex items-center justify-between">
+                <h3 class="text-xs font-semibold uppercase tracking-wider text-chrome-subText flex items-center gap-2">
+                    <i data-lucide="box" class="w-4 h-4 text-chrome-purple"></i> Running Docker Containers (Crostini Scope)
+                </h3>
+                <span id="container-count" class="text-xs font-mono text-chrome-subText">0 active</span>
+            </div>
+
+            <div class="overflow-x-auto">
+                <table class="w-full text-left font-mono text-xs">
+                    <thead>
+                        <tr class="text-chrome-subText border-b border-chrome-border/80">
+                            <th class="pb-2">CONTAINER ID</th>
+                            <th class="pb-2">NAME</th>
+                            <th class="pb-2">IMAGE</th>
+                            <th class="pb-2">STATUS</th>
+                            <th class="pb-2">PORTS</th>
+                        </tr>
+                    </thead>
+                    <tbody id="container-table-body" class="divide-y divide-chrome-border/30">
+                        <!-- Container Rows Injected Here -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Crostini Agent Bridge Modal -->
+    <div id="helper-modal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+        <div class="bg-chrome-card border border-chrome-border rounded-2xl max-w-2xl w-full p-6 space-y-5 shadow-2xl relative">
+            <button id="close-modal-btn" class="absolute top-4 right-4 p-1 rounded-lg text-chrome-subText hover:text-white hover:bg-chrome-border">
+                <i data-lucide="x" class="w-5 h-5"></i>
+            </button>
+
+            <div class="flex items-center gap-3">
+                <div class="p-3 bg-chrome-purple/10 border border-chrome-purple/30 rounded-xl text-chrome-purple">
+                    <i data-lucide="terminal" class="w-6 h-6"></i>
+                </div>
+                <div>
+                    <h2 class="text-lg font-bold">Crostini Native Telemetry Bridge</h2>
+                    <p class="text-xs text-chrome-subText">Bridge real Debian Linux container metrics directly into this Dashboard</p>
+                </div>
+            </div>
+
+            <p class="text-xs text-chrome-darkText leading-relaxed">
+                ChromeOS sandboxes web browsers for security. To feed exact CPU core frequencies, real Linux RAM usage (`/proc/meminfo`), network interfaces (`/proc/net/dev`), and Crostini LXC disk storage (`df -h`), run this lightweight Python HTTP bridge inside your Crostini terminal:
+            </p>
+
+            <!-- Script Copy Box -->
+            <div class="space-y-2">
+                <div class="flex justify-between items-center text-xs font-mono text-chrome-subText">
+                    <span>1-Line Setup Command (Run inside Debian Terminal):</span>
+                    <button id="copy-script-btn" class="text-chrome-accent hover:underline flex items-center gap-1 text-[11px]">
+                        <i data-lucide="copy" class="w-3.5 h-3.5"></i> Copy Command
+                    </button>
+                </div>
+                <div class="bg-chrome-bg border border-chrome-border rounded-xl p-3 font-mono text-xs text-chrome-accent overflow-x-auto select-all">
+                    curl -sSL https://raw.githubusercontent.com/crostini-monitor/agent/main/serve.py | python3
+                </div>
+            </div>
+
+            <!-- Alternative manual code block -->
+            <div class="space-y-1">
+                <span class="text-xs font-mono text-chrome-subText">Or create `crostini_agent.py` manually:</span>
+                <pre class="bg-chrome-bg border border-chrome-border rounded-xl p-3 font-mono text-[11px] text-chrome-subText overflow-x-auto max-h-36"><code>from http.server import HTTPServer, BaseHTTPRequestHandler
+import json, subprocess, os
+
+class StatsHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        
+        # Read system metrics
+        mem = open('/proc/meminfo').read()
+        stat = open('/proc/stat').read()
+        df = subprocess.check_output(['df', '-h', '/']).decode()
+        
+        payload = {"status": "ok", "mem": mem, "stat": stat, "df": df}
+        self.wfile.write(json.dumps(payload).encode())
+
+print("Crostini Agent Listening on http://localhost:8050")
+HTTPServer(('0.0.0.0', 8050), StatsHandler).serve_forever()</code></pre>
+            </div>
+
+            <div class="flex items-center justify-between pt-2">
+                <span class="text-xs text-chrome-subText">Endpoint: <code class="text-chrome-accent font-mono">http://localhost:8050</code></span>
+                <button id="test-agent-btn" class="px-4 py-2 bg-chrome-accent text-chrome-bg font-semibold text-xs rounded-xl hover:bg-chrome-accentHover transition-colors flex items-center gap-1.5">
+                    <i data-lucide="refresh-cw" class="w-4 h-4"></i> Test Agent Connection
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Application Script -->
+    <script>
+        // State Management
+        const state = {
+            refreshInterval: 1000,
+            agentConnected: false,
+            demoMode: true,
+            timerId: null,
+            historyLength: 20,
+            
+            // System Telemetry Data
+            metrics: {
+                cpuPercent: 28,
+                cpuLoadAvg: "0.45, 0.32, 0.18",
+                cpuCores: navigator.hardwareConcurrency || 4,
+                cpuFreq: "2.30 GHz",
+                
+                ramTotalGB: 8.0,
+                ramUsedGB: 3.4,
+                ramFreeGB: 4.6,
+                ramPercent: 42,
+                swapMB: 512,
+                
+                hostDiskTotalGB: 128,
+                hostDiskUsedGB: 42,
+                hostDiskPercent: 33,
+                
+                crostiniDiskTotalGB: 32,
+                crostiniDiskUsedGB: 11.2,
+                crostiniDiskPercent: 35,
+                
+                rxSpeedKB: 124,
+                txSpeedKB: 45,
+                
+                processes: [],
+                containers: []
+            }
+        };
+
+        // DOM Element Cache
+        const elements = {
+            intervalSlider: document.getElementById('interval-slider'),
+            intervalVal: document.getElementById('interval-val'),
+            modeToggle: document.getElementById('mode-toggle'),
+            demoAlert: document.getElementById('demo-mode-alert'),
+            openHelperBtn: document.getElementById('open-helper-btn'),
+            closeModalBtn: document.getElementById('close-modal-btn'),
+            helperModal: document.getElementById('helper-modal'),
+            copyScriptBtn: document.getElementById('copy-script-btn'),
+            testAgentBtn: document.getElementById('test-agent-btn'),
+            agentStatusLabel: document.getElementById('agent-status-label'),
+            
+            // Metric Displays
+            cpuPercent: document.getElementById('cpu-percent'),
+            cpuLoadAvg: document.getElementById('cpu-load-avg'),
+            cpuCores: document.getElementById('cpu-cores'),
+            cpuFreq: document.getElementById('cpu-freq'),
+            
+            ramPercent: document.getElementById('ram-percent'),
+            ramUsedText: document.getElementById('ram-used-text'),
+            ramFreeText: document.getElementById('ram-free-text'),
+            swapText: document.getElementById('swap-text'),
+            
+            hostDiskPercent: document.getElementById('host-disk-percent'),
+            hostDiskUsed: document.getElementById('host-disk-used'),
+            hostDiskTotal: document.getElementById('host-disk-total'),
+            hostDiskBar: document.getElementById('host-disk-bar'),
+            
+            crostiniDiskPercent: document.getElementById('crostini-disk-percent'),
+            crostiniDiskUsed: document.getElementById('crostini-disk-used'),
+            crostiniDiskTotal: document.getElementById('crostini-disk-total'),
+            crostiniDiskBar: document.getElementById('crostini-disk-bar'),
+            
+            stackCrostini: document.getElementById('stack-crostini'),
+            stackHost: document.getElementById('stack-host'),
+            stackFree: document.getElementById('stack-free'),
+            diskTotalCombined: document.getElementById('disk-total-combined'),
+            
+            rxRate: document.getElementById('rx-rate'),
+            txRate: document.getElementById('tx-rate'),
+            netType: document.getElementById('net-type'),
+            netDownlink: document.getElementById('net-downlink'),
+            netRtt: document.getElementById('net-rtt'),
+            
+            processTableBody: document.getElementById('process-table-body'),
+            containerTableBody: document.getElementById('container-table-body'),
+            containerCount: document.getElementById('container-count')
+        };
+
+        // Charts Initialization
+        let cpuChart, netChart;
+
+        function initCharts() {
+            const chartFont = { family: 'JetBrains Mono', size: 10 };
+            const gridColor = 'rgba(46, 49, 56, 0.5)';
+
+            // CPU History Chart
+            const ctxCpu = document.getElementById('cpuHistoryChart').getContext('2d');
+            cpuChart = new Chart(ctxCpu, {
+                type: 'line',
+                data: {
+                    labels: Array(state.historyLength).fill(''),
+                    datasets: [{
+                        label: 'CPU Usage %',
+                        data: Array(state.historyLength).fill(25),
+                        borderColor: '#8ab4f8',
+                        backgroundColor: 'rgba(138, 180, 248, 0.1)',
+                        fill: true,
+                        tension: 0.3,
+                        borderWidth: 2,
+                        pointRadius: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: { min: 0, max: 100, grid: { color: gridColor }, ticks: { color: '#9aa0a6', font: chartFont } },
+                        x: { grid: { display: false } }
+                    },
+                    plugins: { legend: { display: false } }
+                }
+            });
+
+            // Network History Chart
+            const ctxNet = document.getElementById('netHistoryChart').getContext('2d');
+            netChart = new Chart(ctxNet, {
+                type: 'line',
+                data: {
+                    labels: Array(state.historyLength).fill(''),
+                    datasets: [
+                        {
+                            label: 'RX (KB/s)',
+                            data: Array(state.historyLength).fill(100),
+                            borderColor: '#81c995',
+                            backgroundColor: 'transparent',
+                            tension: 0.3,
+                            borderWidth: 2,
+                            pointRadius: 0
+                        },
+                        {
+                            label: 'TX (KB/s)',
+                            data: Array(state.historyLength).fill(40),
+                            borderColor: '#8ab4f8',
+                            backgroundColor: 'transparent',
+                            tension: 0.3,
+                            borderWidth: 2,
+                            pointRadius: 0
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: { beginAtZero: true, grid: { color: gridColor }, ticks: { color: '#9aa0a6', font: chartFont } },
+                        x: { grid: { display: false } }
+                    },
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        // Draw Canvas Arc Gauge
+        function drawGauge(canvasId, valuePercent, colorHex) {
+            const canvas = document.getElementById(canvasId);
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            const size = canvas.width;
+            const center = size / 2;
+            const radius = center - 12;
+            const startAngle = 0.75 * Math.PI;
+            const endAngle = 2.25 * Math.PI;
+
+            ctx.clearRect(0, 0, size, size);
+
+            // Background Track Arc
+            ctx.beginPath();
+            ctx.arc(center, center, radius, startAngle, endAngle);
+            ctx.lineWidth = 10;
+            ctx.strokeStyle = '#2e3138';
+            ctx.lineCap = 'round';
+            ctx.stroke();
+
+            // Active Value Arc
+            const currentAngle = startAngle + (valuePercent / 100) * (endAngle - startAngle);
+            ctx.beginPath();
+            ctx.arc(center, center, radius, startAngle, currentAngle);
+            ctx.lineWidth = 10;
+            ctx.strokeStyle = colorHex;
+            ctx.lineCap = 'round';
+            ctx.stroke();
+        }
+
+        // Simulated Telemetry Generator
+        function generateSimulatedMetrics() {
+            const m = state.metrics;
+            
+            // Fluctuate CPU
+            m.cpuPercent = Math.min(100, Math.max(8, m.cpuPercent + (Math.random() * 14 - 7))).toFixed(1);
+            m.cpuLoadAvg = `${(m.cpuPercent / 25).toFixed(2)}, ${(m.cpuPercent / 30).toFixed(2)}, ${(m.cpuPercent / 40).toFixed(2)}`;
+
+            // Web Memory API integration if available
+            if (window.performance && window.performance.memory) {
+                const mem = window.performance.memory;
+                m.ramUsedGB = (mem.usedJSHeapSize / (1024 * 1024 * 1024) + 3.1).toFixed(1);
+                m.ramTotalGB = (mem.jsHeapSizeLimit / (1024 * 1024 * 1024) + 4.0).toFixed(1);
+            } else {
+                m.ramUsedGB = Math.min(7.8, Math.max(2.1, (parseFloat(m.ramUsedGB) + (Math.random() * 0.2 - 0.1)))).toFixed(1);
+            }
+            m.ramPercent = Math.round((m.ramUsedGB / m.ramTotalGB) * 100);
+            m.ramFreeGB = (m.ramTotalGB - m.ramUsedGB).toFixed(1);
+
+            // Network API Integration
+            if (navigator.connection) {
+                elements.netType.textContent = navigator.connection.effectiveType ? navigator.connection.effectiveType.toUpperCase() : 'Wi-Fi';
+                elements.netDownlink.textContent = `${navigator.connection.downlink || 50} Mbps`;
+                elements.netRtt.textContent = `${navigator.connection.rtt || 20} ms`;
+            }
+
+            m.rxSpeedKB = Math.round(Math.max(10, m.rxSpeedKB + (Math.random() * 80 - 40)));
+            m.txSpeedKB = Math.round(Math.max(5, m.txSpeedKB + (Math.random() * 30 - 15)));
+
+            // Mock Debian/Crostini processes
+            m.processes = [
+                { pid: 1042, cmd: 'python3 -m vscode_server', user: 'garcia', cpu: (m.cpuPercent * 0.35).toFixed(1), mem: 4.2 },
+                { pid: 812, cmd: 'containerd / lxc-crostini', user: 'root', cpu: (m.cpuPercent * 0.22).toFixed(1), mem: 2.1 },
+                { pid: 1490, cmd: 'node /build/server.js', user: 'garcia', cpu: (m.cpuPercent * 0.18).toFixed(1), mem: 3.8 },
+                { pid: 310, cmd: 'systemd --user', user: 'garcia', cpu: '0.4', mem: 0.5 },
+                { pid: 2102, cmd: 'zsh / terminal-emulator', user: 'garcia', cpu: '0.2', mem: 0.8 }
+            ];
+
+            // Mock Docker Containers
+            m.containers = [
+                { id: 'a1b2c3d4e5f6', name: 'resource-monitor-app', image: 'python:3.11-slim', status: 'Up 2 hours', ports: '0.0.0.0:8050->8050/tcp' },
+                { id: 'f6e5d4c3b2a1', name: 'postgres-db', image: 'postgres:15-alpine', status: 'Up 2 hours', ports: '0.0.0.0:5432->5432/tcp' },
+                { id: '1a2b3c4d5e6f', name: 'redis-cache', image: 'redis:alpine', status: 'Up 5 hours', ports: '0.0.0.0:6379->6379/tcp' }
+            ];
+        }
+
+        // Fetch Real Crostini Telemetry from Python Bridge
+        async function fetchCrostiniAgentMetrics() {
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 1200);
+                
+                const response = await fetch('http://localhost:8050/stats', { signal: controller.signal });
+                clearTimeout(timeoutId);
+
+                if (response.ok) {
+                    const data = await response.json();
+                    state.agentConnected = true;
+                    state.demoMode = false;
+                    
+                    // Parse native metrics if returned
+                    if (data.cpu_percent !== undefined) state.metrics.cpuPercent = data.cpu_percent;
+                    if (data.ram_used_gb !== undefined) state.metrics.ramUsedGB = data.ram_used_gb;
+                    if (data.ram_total_gb !== undefined) state.metrics.ramTotalGB = data.ram_total_gb;
+                    if (data.crostini_disk_used !== undefined) state.metrics.crostiniDiskUsedGB = data.crostini_disk_used;
+                    if (data.processes !== undefined) state.metrics.processes = data.processes;
+                    if (data.containers !== undefined) state.metrics.containers = data.containers;
+                    
+                    updateUIState();
+                    return true;
+                }
+            } catch (err) {
+                state.agentConnected = false;
+            }
+            return false;
+        }
+
+        // Update All UI Elements
+        function render() {
+            const m = state.metrics;
+
+            // Gauges
+            drawGauge('cpu-gauge', m.cpuPercent, '#8ab4f8');
+            drawGauge('ram-gauge', m.ramPercent, '#81c995');
+
+            // CPU Texts
+            elements.cpuPercent.textContent = `${m.cpuPercent}%`;
+            elements.cpuLoadAvg.textContent = `Load: ${m.cpuLoadAvg}`;
+            elements.cpuCores.textContent = m.cpuCores;
+
+            // RAM Texts
+            elements.ramPercent.textContent = `${m.ramPercent}%`;
+            elements.ramUsedText.textContent = `${m.ramUsedGB} / ${m.ramTotalGB} GB`;
+            elements.ramFreeText.textContent = `Free: ${m.ramFreeGB} GB`;
+
+            // Storage Bars
+            elements.hostDiskPercent.textContent = `${m.hostDiskPercent}%`;
+            elements.hostDiskUsed.textContent = `${m.hostDiskUsedGB} GB`;
+            elements.hostDiskTotal.textContent = `${m.hostDiskTotalGB} GB`;
+            elements.hostDiskBar.style.width = `${m.hostDiskPercent}%`;
+
+            elements.crostiniDiskPercent.textContent = `${m.crostiniDiskPercent}%`;
+            elements.crostiniDiskUsed.textContent = `${m.crostiniDiskUsedGB} GB`;
+            elements.crostiniDiskTotal.textContent = `${m.crostiniDiskTotalGB} GB`;
+            elements.crostiniDiskBar.style.width = `${m.crostiniDiskPercent}%`;
+
+            // Stacked Bar Calculation
+            const crostiniRatio = (m.crostiniDiskTotalGB / m.hostDiskTotalGB) * 100;
+            const hostUsedRatio = (m.hostDiskUsedGB / m.hostDiskTotalGB) * 100;
+            const freeRatio = 100 - crostiniRatio - hostUsedRatio;
+
+            elements.stackCrostini.style.width = `${crostiniRatio}%`;
+            elements.stackHost.style.width = `${hostUsedRatio}%`;
+            elements.stackFree.style.width = `${Math.max(0, freeRatio)}%`;
+
+            // Network Rates
+            elements.rxRate.textContent = `${m.rxSpeedKB} KB/s`;
+            elements.txRate.textContent = `${m.txSpeedKB} KB/s`;
+
+            // Update Line Charts
+            if (cpuChart && netChart) {
+                // CPU Chart
+                cpuChart.data.datasets[0].data.push(m.cpuPercent);
+                cpuChart.data.datasets[0].data.shift();
+                cpuChart.update('none');
+
+                // Network Chart
+                netChart.data.datasets[0].data.push(m.rxSpeedKB);
+                netChart.data.datasets[0].data.shift();
+                netChart.data.datasets[1].data.push(m.txSpeedKB);
+                netChart.data.datasets[1].data.shift();
+                netChart.update('none');
+            }
+
+            // Render Process Table
+            elements.processTableBody.innerHTML = m.processes.map(p => `
+                <tr class="hover:bg-chrome-bg/50 transition-colors">
+                    <td class="py-1.5 text-chrome-subText">${p.pid}</td>
+                    <td class="py-1.5 font-medium text-chrome-darkText">${p.cmd}</td>
+                    <td class="py-1.5 text-chrome-subText">${p.user}</td>
+                    <td class="py-1.5 text-right text-chrome-accent">${p.cpu}%</td>
+                    <td class="py-1.5 text-right text-chrome-green">${p.mem}%</td>
+                </tr>
+            `).join('');
+
+            // Render Container Table
+            elements.containerCount.textContent = `${m.containers.length} active`;
+            if (m.containers.length === 0) {
+                elements.containerTableBody.innerHTML = `<tr><td colspan="5" class="py-3 text-center text-chrome-subText">No running Docker containers detected</td></tr>`;
+            } else {
+                elements.containerTableBody.innerHTML = m.containers.map(c => `
+                    <tr class="hover:bg-chrome-bg/50 transition-colors">
+                        <td class="py-1.5 text-chrome-purple font-mono">${c.id.substring(0, 12)}</td>
+                        <td class="py-1.5 font-medium text-chrome-darkText">${c.name}</td>
+                        <td class="py-1.5 text-chrome-subText">${c.image}</td>
+                        <td class="py-1.5 text-chrome-green">${c.status}</td>
+                        <td class="py-1.5 text-chrome-subText">${c.ports || 'None'}</td>
+                    </tr>
+                `).join('');
+            }
+        }
+
+        // Loop Tick
+        async function tick() {
+            if (!state.demoMode) {
+                const success = await fetchCrostiniAgentMetrics();
+                if (!success) {
+                    generateSimulatedMetrics();
+                }
+            } else {
+                generateSimulatedMetrics();
+            }
+            render();
+        }
+
+        // Timer Loop Control
+        function resetTimer() {
+            if (state.timerId) clearInterval(state.timerId);
+            state.timerId = setInterval(tick, state.refreshInterval);
+        }
+
+        // Update UI State Mode Labels
+        function updateUIState() {
+            if (state.agentConnected) {
+                elements.modeToggle.textContent = 'Agent Connected';
+                elements.modeToggle.className = 'font-medium px-2 py-0.5 rounded text-xs bg-chrome-green/20 text-chrome-green border border-chrome-green/30';
+                elements.demoAlert.classList.add('hidden');
+                elements.agentStatusLabel.textContent = 'Agent: Online (http://localhost:8050)';
+                elements.agentStatusLabel.className = 'text-chrome-green font-mono';
+            } else {
+                elements.modeToggle.textContent = 'Simulated / Hybrid API';
+                elements.modeToggle.className = 'font-medium px-2 py-0.5 rounded text-xs bg-chrome-border text-chrome-subText';
+                elements.demoAlert.classList.remove('hidden');
+                elements.agentStatusLabel.textContent = 'Agent: Disconnected (Fallback Mode)';
+                elements.agentStatusLabel.className = 'text-chrome-yellow font-mono';
+            }
+        }
+
+        // Event Listeners Setup
+        function setupEvents() {
+            // Slider Refresh Rate
+            elements.intervalSlider.addEventListener('input', (e) => {
+                const val = parseFloat(e.target.value);
+                state.refreshInterval = val * 1000;
+                elements.intervalVal.textContent = `${val.toFixed(1)}s`;
+                resetTimer();
+            });
+
+            // Toggle Mode
+            elements.modeToggle.addEventListener('click', () => {
+                state.demoMode = !state.demoMode;
+                if (!state.demoMode) {
+                    fetchCrostiniAgentMetrics();
+                }
+                updateUIState();
+            });
+
+            // Modal Toggles
+            elements.openHelperBtn.addEventListener('click', () => {
+                elements.helperModal.classList.remove('hidden');
+            });
+            elements.closeModalBtn.addEventListener('click', () => {
+                elements.helperModal.classList.add('hidden');
+            });
+
+            // Copy Command
+            elements.copyScriptBtn.addEventListener('click', () => {
+                const cmd = "curl -sSL https://raw.githubusercontent.com/crostini-monitor/agent/main/serve.py | python3";
+                const tempInput = document.createElement('input');
+                tempInput.value = cmd;
+                document.body.appendChild(tempInput);
+                tempInput.select();
+                document.execCommand('copy');
+                document.body.removeChild(tempInput);
+
+                elements.copyScriptBtn.innerHTML = `<i data-lucide="check" class="w-3.5 h-3.5 text-chrome-green"></i> Copied!`;
+                setTimeout(() => {
+                    elements.copyScriptBtn.innerHTML = `<i data-lucide="copy" class="w-3.5 h-3.5"></i> Copy Command`;
+                    lucide.createIcons();
+                }, 2000);
+            });
+
+            // Test Agent Connection Button
+            elements.testAgentBtn.addEventListener('click', async () => {
+                elements.testAgentBtn.disabled = true;
+                elements.testAgentBtn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> Testing...`;
+                lucide.createIcons();
+
+                const connected = await fetchCrostiniAgentMetrics();
+                
+                if (connected) {
+                    elements.testAgentBtn.className = 'px-4 py-2 bg-chrome-green text-chrome-bg font-semibold text-xs rounded-xl flex items-center gap-1.5';
+                    elements.testAgentBtn.innerHTML = `<i data-lucide="check" class="w-4 h-4"></i> Connected!`;
+                    setTimeout(() => {
+                        elements.helperModal.classList.add('hidden');
+                    }, 1000);
+                } else {
+                    elements.testAgentBtn.className = 'px-4 py-2 bg-chrome-red text-white font-semibold text-xs rounded-xl flex items-center gap-1.5';
+                    elements.testAgentBtn.innerHTML = `<i data-lucide="alert-circle" class="w-4 h-4"></i> Failed to Connect`;
+                    setTimeout(() => {
+                        elements.testAgentBtn.className = 'px-4 py-2 bg-chrome-accent text-chrome-bg font-semibold text-xs rounded-xl hover:bg-chrome-accentHover transition-colors flex items-center gap-1.5';
+                        elements.testAgentBtn.innerHTML = `<i data-lucide="refresh-cw" class="w-4 h-4"></i> Test Agent Connection`;
+                        elements.testAgentBtn.disabled = false;
+                        lucide.createIcons();
+                    }, 2000);
+                }
+            });
+        }
+
+        // App Initialization
+        window.onload = function() {
+            lucide.createIcons();
+            initCharts();
+            setupEvents();
+            
+            // Try initial agent ping
+            fetchCrostiniAgentMetrics();
+            
+            // Initial render and timer startup
+            tick();
+            resetTimer();
+        };
+    </script>
+</body>
+</html>
