@@ -5,9 +5,11 @@ import os
 import subprocess
 import time
 import urllib.parse
+import mimetypes
 
 PORT = 8050
-HTML_FILE = "system_resource_monitor.html"
+PATH="/home/joseantoniomanzanor/.config/systemd/run/resource-monitor/"
+HTML_FILE = PATH + "system_resource_monitor.html"
 
 # Network speed tracking variables
 last_net_check = time.time()
@@ -150,49 +152,70 @@ def get_containers():
         containers = []
     return containers
 
-class MonitorHandler(http.server.SimpleHTTPRequestHandler):
-    def do_GET(self):
-        parsed_url = urllib.parse.urlparse(self.path)
-        if parsed_url.path == '/stats':
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            
-            cpu = get_cpu_percent()
-            mem = get_memory_info()
-            disk = get_disk_info()
-            rx, tx = get_network_speeds()
-            procs = get_processes()
-            containers = get_containers()
-            
-            data = {
-                "cpu_percent": cpu,
-                "ram_used_gb": mem["used"],
-                "ram_total_gb": mem["total"],
-                "ram_free_gb": mem["free"],
-                "ram_percent": mem["percent"],
-                "host_disk_percent": disk["host_percent"],
-                "host_disk_used_gb": disk["host_used"],
-                "host_disk_total_gb": disk["host_total"],
-                "crostini_disk_percent": disk["crostini_percent"],
-                "crostini_disk_used_gb": disk["crostini_used"],
-                "crostini_disk_total_gb": disk["crostini_total"],
-                "rx_speed_kb": rx,
-                "tx_speed_kb": tx,
-                "processes": procs,
-                "containers": containers
-            }
-            self.wfile.write(json.dumps(data).encode('utf-8'))
-        else:
-            if parsed_url.path == '/' or parsed_url.path == '':
-                self.path = '/' + HTML_FILE
-            return super().do_GET()
+# Reemplaza la sección del MonitorHandler en tu server.py por esto:
 
-    def end_headers(self):
-        self.send_header('Access-Control-Allow-Origin', '*')
-        super().end_headers()
+import mimetypes
 
+
+class MonitorHandler(http.server.BaseHTTPRequestHandler):
+
+  def do_GET(self):
+    parsed_url = urllib.parse.urlparse(self.path)
+
+    # Endpoint de métricas
+    if parsed_url.path == "/stats":
+      self.send_response(200)
+      self.send_header("Content-Type", "application/json")
+      self.send_header("Access-Control-Allow-Origin", "*")
+      self.end_headers()
+
+      cpu = get_cpu_percent()
+      mem = get_memory_info()
+      disk = get_disk_info()
+      rx, tx = get_network_speeds()
+      procs = get_processes()
+      containers = get_containers()
+
+      data = {
+          "cpu_percent": cpu,
+          "ram_used_gb": mem["used"],
+          "ram_total_gb": mem["total"],
+          "ram_free_gb": mem["free"],
+          "ram_percent": mem["percent"],
+          "host_disk_percent": disk["host_percent"],
+          "host_disk_used_gb": disk["host_used"],
+          "host_disk_total_gb": disk["host_total"],
+          "crostini_disk_percent": disk["crostini_percent"],
+          "crostini_disk_used_gb": disk["crostini_used"],
+          "crostini_disk_total_gb": disk["crostini_total"],
+          "rx_speed_kb": rx,
+          "tx_speed_kb": tx,
+          "processes": procs,
+          "containers": containers,
+      }
+      self.wfile.write(json.dumps(data).encode("utf-8"))
+
+    # Servir la página web principal y recursos estáticos
+    else:
+      target_file = HTML_FILE if parsed_url.path in ["/", ""] else PATH + parsed_url.path.lstrip("/")
+      if os.path.exists(target_file) and os.path.isfile(target_file):
+        self.send_response(200)
+        mime_type, _ = mimetypes.guess_type(target_file)
+        self.send_header(
+            "Content-Type", mime_type or "application/octet-stream"
+        )
+        self.end_headers()
+        with open(target_file, "rb") as f:
+          self.wfile.write(f.read())
+      else:
+        self.send_response(404)
+        self.end_headers()
+        self.wfile.write(b"404 - File Not Found")
+
+  def log_message(self, format, *args):
+    # Opcional: mantener logs limpios
+    return
+  
 if __name__ == '__main__':
     server_address = ('', PORT)
     httpd = http.server.HTTPServer(server_address, MonitorHandler)
